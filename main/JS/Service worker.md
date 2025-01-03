@@ -103,6 +103,8 @@ self.addEventListener('install', (ev) => {
 
 Eсли `activate`  был вызван немедленно с помощью `self.skipWaiting()` в `install`, и была открыта старая вкладка и открывается новая, где загружается обновленный SW, то на старой вкладке запросы будут тоже идти через новый `fetch`  даже **БЕЗ** `event.waitUntil(self.clients.claim());`. На ней так же вызовется `oncontrollerchange`
 
+Хотя в доке написано *Вызывает событие "`controllerchange`" на [`navigator.serviceWorker`](https://developer.mozilla.org/ru/docs/Web/API/ServiceWorkerContainer "navigator.serviceWorker") всех клиентских страниц, контролируемых сервис-воркером.* (https://developer.mozilla.org/ru/docs/Web/API/Clients/claim), оно отрабатывает и без него
+
 ```
 <!DOCTYPE html>
 <html lang="en">
@@ -113,6 +115,7 @@ Eсли `activate`  был вызван немедленно с помощью `
 <body>
 <img id="img" src="./img.png">
 <script>
+console.log("REFRESH")
   document.getElementById("img").addEventListener('click', () => {
     const img2 = new Image();
     img2.src = "./img2.png"
@@ -151,7 +154,20 @@ self.addEventListener('fetch', (ev) => {
 ```
 
 
-
+```
+// На второй вкладке, без релоада
+REFRESH
+ID 0.48171652829106426
+fetch 0 395e8533-b5e7-421b-897d-4deaad223710 (sw.js)
+fetch 0 b6536b25-b35c-4a55-aae6-e2ef071b3ff4 (sw.js)
+...
+// обновлили первую вкладку, тут пишет:
+install 1 (sw.js)
+CONTROLLER CHANGED 0.48171652829106426
+activate 1 (sw.js)
+// кликаем по картинке
+fetch 1 395e8533-b5e7-421b-897d-4deaad223710 (sw.js)
+```
 
 
 Links:
