@@ -170,6 +170,47 @@ fetch 1 395e8533-b5e7-421b-897d-4deaad223710 (sw.js)
 ```
 
 
+##### Перехват запросов
+Для того, чтобы начать перехватывать запросы, добавляем `fetch` event listenter. При этом в коллбек будет приходить fetchEvent. Этот реквест мы можем как просто пропустить через себя и ничего с ним не делать:
+
+```
+self.addEventListener('fetch', (e) => {
+	e.respondWith(fetch(e.request))
+})
+```
+
+
+Так и достать реквест из кеша (если он там есть). Ну а дальше уже можно принимать разные стратегии, в зависимости от нужного поведения:
+https://habr.com/ru/companies/2gis/articles/345552/
+
+```
+self.addEventListener("fetch", (event) => {
+  // В случае не-GET запроса браузер должен сам обрабатывать его
+  if (event.request.method != "GET") return;
+
+  // Обрабатываем запрос с помощью логики service worker
+  event.respondWith(
+    (async function () {
+      // Пытаемся получить ответ из кеша.
+      const cache = await caches.open("dynamic-v1");
+      const cachedResponse = await cache.match(event.request);
+
+      if (cachedResponse) {
+        // Если кеш был найден, возвращаем данные из него
+        // и запускаем фоновое обновление данных в кеше.
+        event.waitUntil(cache.add(event.request));
+        return cachedResponse;
+      }
+
+      // В случае, если данные не были найдены в кеше, получаем их с сервера.
+      return fetch(event.request);
+    })(),
+  );
+});
+```
+
+Если мы хотим положить response в кеш, нужно его клонировать. При этом, можно сначала ответить браузеру, затем с помошью `ev.waitUntil` класть ответ в кеш
+
 Links:
 https://github.com/mdn/serviceworker-cookbook/
 https://www.youtube.com/playlist?list=PLyuRouwmQCjl4iJgjH3i61tkqauM-NTGj
