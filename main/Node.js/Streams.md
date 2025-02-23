@@ -478,3 +478,211 @@ readable.on('readable', function() {
 
 ##### `'resume'`
 Событие `'resume'` генерируется, когда вызывается `stream.resume()`, а `readableFlowing` не равен true.
+
+
+#### paused mode 
+```
+// test.txt
+AAAABBBBCCCCDDDDEEEEFFFF
+```
+
+
+```
+const fs = require("node:fs")
+const stream = fs.createReadStream("./test.txt", {encoding: "utf-8", highWaterMark: 8});
+stream.on('readable', function(){
+    console.log('READABLE')
+    let chunk;
+    do{
+        chunk = this.read(8);
+        console.log(chunk);
+    } while(chunk != null)
+});
+```
+
+и так, мы установили read stream, чтобы он вычитывал по 8 байтов, и подписались на readable
+
+Это значит, что каждый раз, когда будут готовы данные для чтения во внутреннем буффере этого стрима, он будет генерировать `readable` ивент, говоря о том, что можно вычитывать
+
+Мы будем читать с той же скоростью
+
+Логи выглядят так:
+```
+READABLE
+AAAABBBB
+null
+READABLE
+CCCCDDDD
+null
+READABLE
+EEEEFFFF
+null
+READABLE
+null
+```
+
+Ок, читаем чуть медленнее:
+`chunk = this.read(4);`
+
+```
+READABLE
+AAAA    
+BBBB    
+null    
+READABLE
+CCCC    
+DDDD    
+null    
+READABLE
+EEEE    
+FFFF
+null
+READABLE
+null
+```
+
+Чуть быстрее:
+`chunk = this.read(12);`
+```
+READABLE
+null
+READABLE
+AAAABBBBCCCC
+DDDDEEEEFFFF
+null
+READABLE
+null
+
+```
+
+Добавим GGGG в text.txt:
+```
+READABLE
+null        
+READABLE    
+AAAABBBBCCCC
+DDDDEEEEFFFF
+null        
+READABLE    
+null        
+READABLE    
+GGGG
+null
+
+```
+
+Почему 
+```
+AAAABBBBCCCC
+DDDDEEEEFFFF
+```
+То есть 24 байта?
+
+Chat GPT
+### Почему поток загружает ещё 8 байт (`EEEEFFFF`)?
+
+Разберёмся глубже. Ключевой момент: **highWaterMark не ограничивает общее количество данных в буфере, а лишь определяет, сколько за раз будет запрашиваться у файловой системы.**
+
+#### 1. Что происходит шаг за шагом?
+
+- `fs.createReadStream` создаёт поток с `highWaterMark = 8`, значит, он **запрашивает данные порциями по 8 байт**.
+- Когда файл открыт, поток **загружает первые 8 байт (`AAAABBBB`) в буфер**.
+- Событие `readable` срабатывает, потому что буфер не пуст.
+- Ты вызываешь `this.read(12)`, но в буфере **всего 8 байт**.
+    **Что делает поток в таком случае?**
+    - Поток видит, что ты запрашиваешь 12 байт, но в буфере есть только 8.
+    - Чтобы удовлетворить запрос, он **подгружает ещё 8 байт (`CCCCDDDD`)** из файла.
+    - Теперь в буфере 16 байт, и `read(12)` возвращает `AAAABBBBCCCC`.
+    - Остаются 4 байта (`DDDD`).
+- Следующий `read(12)` видит, что в буфере **всего 4 байта**, и **запрашивает ещё 8 байт (`EEEEFFFF`)**.
+- Теперь в буфере **12 байт** (`DDDDEEEEFFFF`), и `read(12)` возвращает их.
+
+#### 2. Ключевая причина
+
+Поток **не останавливается** после загрузки `highWaterMark`. Он работает так:
+1. Если буфер пуст, загружаем `highWaterMark` байт.
+2. Если кто-то вызвал `read(N)`, и в буфере **меньше, чем N**, **дозапрашиваем ещё данные** (но всегда кусками `highWaterMark`).
+
+Ок, вроде ясно
+
+Попробуем так:
+```
+const fs = require("node:fs")
+const stream = fs.createReadStream("./test.txt", {encoding: "utf-8", highWaterMark: 2});
+stream.on('readable', function(){
+    console.log('READABLE')
+    console.log(stream.readableLength)
+    console.log(stream.read(16))
+});
+```
+
+Посмотрим, какой размер буффера на каждом шаге:
+
+```
+READABLE
+2               
+null            
+READABLE        
+18              
+AAAABBBBCCCCDDDD
+READABLE        
+12              
+null            
+READABLE        
+12              
+EEEEFFFFGGGG 
+```
+
+Что тоже странно. Почему на 3 readable у нас в буффере 12. Почему он не сделал этот ивент на 8 или 6?
+Гпт говорит, что 
+- `readable` **не срабатывает просто так каждые 2 байта**. Он **срабатывает, когда буфер переходит из пустого в заполненное состояние**.
+- После второго `readable` буфер никогда не был полностью пустым (он постоянно содержал **как минимум 2 байта**).
+- `readable` сработал на `12`, потому что именно к этому моменту:
+    1. Буфер был пуст.
+    2. Поток **загрузил** очередную порцию данных (12 байт).
+    3. Это вызвало новое `readable`.
+
+Короче, непонятно
+
+
+### Transform stream
+Это стримы, которые могут трансформировать наши данные.
+
+например, трансформируем наш стрим:
+
+```
+const fs = require("node:fs")
+const { Transform } = require("stream");
+
+const replaceStream = new Transform({
+    decodeStrings: false, 
+    encoding: 'utf8',
+    transform(chunk, encoding, callback) {
+        const transformed = chunk
+            .replace(/A/g, "@")
+            .replace(/B/g, "8")
+            .replace(/C/g, "(");
+
+        this.push(transformed);
+        callback();
+    }
+});
+
+const stream = fs.createReadStream("./test.txt", {encoding: "utf-8", highWaterMark: 8});
+
+const transformed = stream.pipe(replaceStream);
+
+transformed.on('readable', function(){
+    console.log('READABLE')
+    let chunk;
+    do{
+        chunk = this.read(8);
+        console.log(chunk)
+    } while(chunk != null)
+});
+
+```
+
+Так же, у него есть метод flush, который нужен, если мы не просто "пропускаем" и сразу трансформируем данные, а например, храним какое-то внутреннее состояние. flush забирает из потока абсолютно все.
+
+Дока: В некоторых случаях операция преобразования может потребовать выдачи дополнительного бита данных в конце потока. Например, `zlib`поток сжатия будет хранить объем внутреннего состояния, используемого для оптимального сжатия выходных данных. Однако, когда поток заканчивается, эти дополнительные данные необходимо сбросить, чтобы сжатые данные были полными.
