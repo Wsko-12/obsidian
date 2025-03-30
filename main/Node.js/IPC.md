@@ -36,19 +36,17 @@ exec('ls -lh', (error, stdout, stderr) => {
 ```
 const { execFile } = require('child_process');
 
-execFile('node', ['-v'], (error, stdout, stderr) => {
-  if (error) {
-    console.error(`Ошибка: ${error.message}`);
-    return;
-  }
-  if (stderr) {
-    console.error(`stderr: ${stderr}`);
-    return;
-  }
-  console.log(`stdout: ${stdout}`);
-});
+execFile('/usr/bin/ls', ['-la'], (error, stdout, stderr) => { ... });
 
 ```
+
+DeepSeek:
+- `exec()` — как если бы вы открыли терминал и вручную ввели команду.
+- `execFile()` — как если бы программа запустилась напрямую, минуя терминал.
+
+
+
+
 
 - `spawn` - запускает процесс, но в отличие от `exec` и `execFile`, он возвращает потоки (streams) для stdin, stdout и stderr.
 
