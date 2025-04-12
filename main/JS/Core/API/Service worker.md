@@ -41,7 +41,7 @@ https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/register
 
 Но это можно расширить, если дать `{scope: "/"}`, однако для этого нужен заголовок на `sw.js` `Service-Worker-Allowed: <scope>`. Если сервер не установил заголовок, регистрация сервисного работника завершится неудачей, так как запрошенный объект `scope`слишком широк.
 
-```
+```js
 if ("serviceWorker" in navigator) {
   // Declaring a broadened scope
   navigator.serviceWorker.register("./sw.js", { scope: "/" }).then(
@@ -61,7 +61,7 @@ if ("serviceWorker" in navigator) {
 ```
 
 Можно удалить все регистрации используя:
-```
+```js
 navigator.serviceWorker.getRegistrations().then((regs) => {  
 	regs.forEach((r) => r.unregister())  
 })
@@ -74,7 +74,7 @@ navigator.serviceWorker.getRegistrations().then((regs) => {
 
 Если в `install` будет использоваться асинхронное API, следует использовать `event.waitUntil`, чтобы установка завершилось тогда, когда все прошло успешно
 
-```
+```js
 const SW = 1  
   
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));  
@@ -98,14 +98,13 @@ self.addEventListener('install', (ev) => {
 ##### Активация
 На этом этапе следует делать очистка старых кэшей, то есть удалять устаревшие данные из кэша, которые использовались предыдущими версиями Service Worker.
 
-
 Для того, чтобы `fetch` начал отрабатывать сразу, после первого `activate`, следуют вызвать `event.waitUntil(self.clients.claim());`.
 
 Eсли `activate`  был вызван немедленно с помощью `self.skipWaiting()` в `install`, и была открыта старая вкладка и открывается новая, где загружается обновленный SW, то на старой вкладке запросы будут тоже идти через новый `fetch`  даже **БЕЗ** `event.waitUntil(self.clients.claim());`. На ней так же вызовется `oncontrollerchange`
 
 Хотя в доке написано *Вызывает событие "`controllerchange`" на [`navigator.serviceWorker`](https://developer.mozilla.org/ru/docs/Web/API/ServiceWorkerContainer "navigator.serviceWorker") всех клиентских страниц, контролируемых сервис-воркером.* (https://developer.mozilla.org/ru/docs/Web/API/Clients/claim), оно отрабатывает и без него
 
-```
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -133,7 +132,7 @@ console.log("REFRESH")
 </html>
 ```
 
-```
+```js
 const SW = 1
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 self.addEventListener('install', (ev) => {
@@ -173,7 +172,7 @@ fetch 1 395e8533-b5e7-421b-897d-4deaad223710 (sw.js)
 ##### Перехват запросов
 Для того, чтобы начать перехватывать запросы, добавляем `fetch` event listenter. При этом в коллбек будет приходить fetchEvent. Этот реквест мы можем как просто пропустить через себя и ничего с ним не делать:
 
-```
+```js
 self.addEventListener('fetch', (e) => {
 	e.respondWith(fetch(e.request))
 })
@@ -183,7 +182,7 @@ self.addEventListener('fetch', (e) => {
 Так и достать реквест из кеша (если он там есть). Ну а дальше уже можно принимать разные стратегии, в зависимости от нужного поведения:
 https://habr.com/ru/companies/2gis/articles/345552/
 
-```
+```js
 self.addEventListener("fetch", (event) => {
   // В случае не-GET запроса браузер должен сам обрабатывать его
   if (event.request.method != "GET") return;
