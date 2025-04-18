@@ -1,11 +1,56 @@
 
+- Зачем нужны Streams в Node.js?
+- Почему они лучше обычных `fs.readFile` / `fs.writeFile`?
+- Типы стримов?
+- С какими типами данных работают стримы?
+- Как реализованы стримы изнутри?
+- Каким параметром настраивается размер внутреннего буфера?
+- Какая проблема может возникнуть при использовании двух стримов?
+- Как решается эта проблема "нативно"?
+- Writeble Streams:
+	- Что возвращает метод для записи?
+	- Что значит, если метод вернул `false` и что с этим делать?
+	- Что за метод `_writev`?
+	- Что делает метод `.cork` и зачем он нужен?
+	- Что будет, если несколько раз подряд вызвать метод `.cork`?
+	- Как лучше вызывать метод `.uncork`?
+	- Что будет, если поток был "corked" и вызывается метод `.end()`?
+	- Что принимает в себя метод `end()`?
+	- Как узнать, сколько раз был поток "corked"?
+- Readable Streams:
+	- как (в каких режимах) работают Readable Streams?
+	- как вернуть поток в paused режим?
+	- как вернуть поток в flowing режим?
+	- Что будет с внутренним буффером стрима, если мы не будет читать данные?
+	- Что будет, если мы переключили поток в flowing режим, но нету слушателей для этого режима?
+	- Почему не стоит их смешивать?
+	- Какой аргумент принимает `.read()` и как он работает без него? Что с этим аргументом если в режиме `objectMode`?
+	- что делают методы `push` и `unshift`? Что возвращают? Что будет если передать туда `null`?
+	- что делает `pipe`? Можно ли запайпить несколько writeble на один readable?
+- Duplex Streams:
+	- Как работает буфферизация у Duplex стримов?
+- Transform Streams:
+	- Чем они отличаются от Duplex?
+	- Что делает метод `flush`?
+- Что предоставляет модуль `node:stream/promises`?
+
+
+
 Потоки в Node.js позволяют нам обрабатывать большие данные порционно, чанками. Тем самым не загружая полностью данные в оперативную память.
 
-Выделяются 4 вида потоков:
+#### Сравнение с `fs.readFile`
+На примере обычного `fs.readFile` файл будет загружен в оперативную память полностью, что плохо при работе с большим объемом данных. Так же не приходится ждать полной загрузки файла, чтобы начать работу с ним. 
+
+Так же, например, если мы стримим пользователю видео, и он хочет начать смотреть его с какой-то минуты, в метод `.createReadStream()` `options`, где указывается параметр `start` в байтах, откуда начать чтение файла. Если указать `start` больше размера файла ошибки не будет, но сразу вызовется событие `'end'` у потока
+
+#### Виды потоков
+ Выделяются 4 вида потоков:
 - Writable
 - Readable
 - Duplex
 - Transform
+
+### Типы данных
 
 Все потоки, созданные API Node.js, работают исключительно со строками, объектами `Buffer` , `TypedArray` и `DataView` :
 
@@ -109,6 +154,8 @@ writable.write('второй части.');
 writable.uncork(); // Все накопленные данные записываются разом
 ```
 
+Так же, если не вызывать метод `.uncork()`, а вызвать `.end()`, то данные из внутреннего буфера  будут записаны в destination 
+
 ##### **`writable.uncork()`**  
 Метод `writable.uncork()` записывает все данные, буферизованные с момента `stream.cork()` вызова.
 
@@ -194,7 +241,7 @@ writable.write('Часть 3');
 ##### `'pipe'`
 Событие `'pipe'` генерируется, когда метод `stream.pipe()` вызывается для читаемого потока, добавляя этот записываемый поток в свой набор назначений.
 
-```
+```js
 const writer = getWritableStreamSomehow();
 const reader = getReadableStreamSomehow();
 writer.on('pipe', (src) => {
@@ -219,6 +266,161 @@ reader.unpipe(writer);
 ```
 
 
+Чтобы создать кастомный Wirtable, нужно переопределить минимум `_write`.
+Если не вызвать `callback()` (Error first), стрим зависнет.
+```js
+const { Writable } = require('stream');
+
+class ConsoleWritable extends Writable {
+  _write(chunk, encoding, callback) {
+    console.log('Получено:', chunk.toString());
+    callback();
+  }
+}
+
+const writable = new ConsoleWritable();
+
+writable.write('Hello\n');
+writable.write('world \n');
+writable.end();
+```
+
+Например, записываем во что-то асинхронное, тогда `callback` следует после того, как все завершится:
+```js
+const { Writable } = require('stream');
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+class ConsoleWritable extends Writable {
+    _write(chunk, encoding, callback) {
+        console.log(`${Math.floor(performance.now())} Получено:`, chunk.toString());
+        delay(2000).then(callback)
+    }
+}
+
+const writable = new ConsoleWritable();
+
+for(let i = 0; i < 5; i++){
+    console.log(`TRY ${i}: ${writable.write(`Test ${i}`)}`);
+}
+
+writable.end();
+
+//LOGS:
+// 30 Получено: Test 0
+// TRY 0: true
+// TRY 1: true
+// TRY 2: true
+// TRY 3: true
+// TRY 4: true
+// 2044 Получено: Test 1
+// 4051 Получено: Test 2
+// 6052 Получено: Test 3
+// 8054 Получено: Test 4
+```
+
+Тоже самое, но с `cork()`
+```js
+const { Writable } = require('stream');
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+class ConsoleWritable extends Writable {
+    _write(chunk, encoding, callback) {
+        console.log(`${Math.floor(performance.now())} Получено:`, chunk.toString());
+        delay(2000).then(callback)
+    }
+}
+
+const writable = new ConsoleWritable();
+
+writable.cork()
+for(let i = 0; i < 5; i++){
+    console.log(`TRY ${i}: ${writable.write(`Test ${i}`)}`);
+}
+writable.uncork()
+
+
+// LOGS:  
+// TRY 0: true  
+// TRY 1: true  
+// TRY 2: true  
+// TRY 3: true  
+// TRY 4: true  
+// 33 Получено: Test 0  
+// 2037 Получено: Test 1  
+// 4041 Получено: Test 2  
+// 6047 Получено: Test 3  
+// 8056 Получено: Test 4
+```
+
+
+`_writev(chunks, callback)`
+Метод `._writev()` может быть реализован в дополнение или альтернативно `writable._write()` в реализациях потока, которые способны обрабатывать несколько фрагментов данных одновременно. Если он реализован и есть буферизованные данные от предыдущих записей, вместо `_write()` будет вызван `_writev()`.
+
+```js
+const { Writable } = require('stream');
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+class ConsoleWritable extends Writable {
+    _write(chunk, encoding, callback) {
+        console.log(`${Math.floor(performance.now())} Получено:`, chunk.toString());
+        delay(2000).then(callback)
+    }
+
+    _writev(chunks, callback) {
+        const combined = chunks.map(({ chunk }) => chunk.toString()).join(' | ');
+        console.log(`${Math.floor(performance.now())} Получены чанки: ${combined}`);
+        delay(2000).then(callback)
+    }
+}
+
+const writable = new ConsoleWritable();
+
+for(let i = 0; i < 5; i++){
+    console.log(`TRY ${i}: ${writable.write(`Test ${i}`)}`);
+}
+
+writable.end();
+
+// LOGS:  
+// 30 Получено: Test 0  
+// TRY 0: true  
+// TRY 1: true  
+// TRY 2: true  
+// TRY 3: true  
+// TRY 4: true  
+// 2046 Получены чанки: Test 1 | Test 2 | Test 3 | Test 4
+```
+
+С `cork()`:
+```js
+const { Writable } = require('stream');
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+class ConsoleWritable extends Writable {
+    _write(chunk, encoding, callback) {
+        console.log(`${Math.floor(performance.now())} Получено:`, chunk.toString());
+        delay(2000).then(callback)
+    }
+
+    _writev(chunks, callback) {
+        const combined = chunks.map(({ chunk }) => chunk.toString()).join(' | ');
+        console.log(`${Math.floor(performance.now())} Получены чанки: ${combined}`);
+        delay(2000).then(callback)
+    }
+}
+
+const writable = new ConsoleWritable();
+
+writable.cork()
+for(let i = 0; i < 5; i++){
+    console.log(`TRY ${i}: ${writable.write(`Test ${i}`)}`);
+}
+writable.uncork()
+
+// LOGS:  
+// TRY 0: true  
+// TRY 1: true  
+// TRY 2: true  
+// TRY 3: true  
+// TRY 4: true  
+// 33 Получены чанки: Test 0 | Test 1 | Test 2 | Test 3 | Test 4
+```
 
 ### Readable streams
 
@@ -245,6 +447,7 @@ Readable стримы могут работать в двух режимах **f
 
 Чтобы вернуться в **paused**-режим:
 - Вызвать `pause()`
+- добавить обработчик `'readable'`
 - У всех стримом в `pipe` вызвать метод `unpipe`
 
 Важно помнить, что `Readable` **не будет генерировать данные**, пока не будет предоставлен механизм для потребления или игнорирования этих данных. Если механизм потребления отключен или удален, Readable попытается прекратить генерировать данные.
@@ -362,6 +565,49 @@ getReadableStreamSomehow()
 
 Метод `readable.resume()` не действует, если имеется хендлер событий `'readable'`.
 
+##### `readable.pipe(destination[, options])`
+прикрепляет `Writable` поток к `readable` , заставляя его автоматически переключаться в `flowing` режим и передавать все свои данные в `Writable`. Поток данных будет автоматически управляться, чтобы целевой `Writable`поток не был перегружен более быстрым `Readable`потоком.
+
+`options`:
+- `end` - По умолчанию `stream.end()` вызывается в целевом `Writable` потоке, когда исходный `Readable` поток испускает `'end'`, так что целевой поток больше не может быть записан. Чтобы отключить это поведение по умолчанию, `end` параметр можно передать как `false`, в результате чего целевой поток останется открытым.
+```js
+reader.pipe(writer, { end: false });
+reader.on('end', () => {
+  writer.end('Goodbye\n');
+});
+```
+Одно важное предостережение заключается в том, что если `Readable` поток выдает ошибку во время обработки, `Writable`пункт назначения **не закрывается** автоматически. Если возникает ошибка, необходимо будет _вручную_ закрыть каждый поток, чтобы предотвратить утечки памяти.
+
+Можно ли зайпайпить несколько writable на один readable?
+GPT и прочие говорят что нет, но я попробовал так:
+
+```js
+const fs = require('node:fs');  
+  
+// const ws = fs.createWriteStream('./text.txt', {highWaterMark: 1000})  
+// for(let i = 0; i < 100000; i++){  
+// ws.write(`test ${i} \n`)  
+// }  
+  
+  
+const rs = fs.createReadStream('./text.txt', {encoding: "utf8", highWaterMark: 32});  
+  
+const ws1 = fs.createWriteStream('./ws1.txt', {highWaterMark: 1});  
+const ws2 = fs.createWriteStream('./ws2.txt', {highWaterMark: 11});  
+const ws3 = fs.createWriteStream('./ws3.txt', {highWaterMark: 2});  
+  
+rs.pipe(ws1);  
+rs.pipe(ws2);  
+rs.pipe(ws3);  
+rs.on('data', console.log)
+```
+
+И вроде все все получали нормально. Так же чел пишет что все работает ок:
+https://github.com/nodejs/help/issues/2707
+
+Получается, что будет проблема только тогда, когда несколько потоков "подпишутся" позже первого. Первый вычитает часть данных, а следующие получат уже без этой части.
+
+
 ##### `readable.unpipe(destination?)`
 - `destination`: `stream.Writable` - Необязательный определенный поток для отсоединения
 
@@ -420,6 +666,35 @@ setTimeout(() => {
 Метод `readable.unshift()` возвращает часть данных обратно во внутренний буфер. Это полезно в определенных ситуациях, когда поток потребляется кодом, которому нужно «отменить потребление» некоторого количества данных, которые он оптимистично вытащил из источника, чтобы данные можно было передать какой-то другой стороне.
 
 Метод `stream.unshift(chunk)` не может быть вызван после срабатывания события `end`, иначе возникнет ошибка времени выполнения.
+
+```js
+class HeaderParser extends Readable {
+  constructor(options) {
+    super(options);
+    this.header = null;
+  }
+
+  _read(size) {
+    if (!this.header) {
+      // Читаем первые 10 байт для заголовка
+      const chunk = this.read(10); 
+      this.header = chunk.toString();
+      
+      // Возвращаем оставшиеся данные в буфер
+      const remainingData = chunk.slice(10);
+      if (remainingData.length > 0) {
+        this.unshift(remainingData);
+      }
+    } else {
+      // Обрабатываем оставшиеся данные
+      const data = this.read(size);
+      if (data) {
+        this.push(data);
+      }
+    }
+  }
+}
+```
 
 
 и тд (https://nodejs.org/api/stream.html#readable-streams)
@@ -644,9 +919,59 @@ EEEEFFFFGGGG
 
 Короче, непонятно
 
+#### Custom Readable
+```js
+const { Readable } = require('stream');
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+class CounterStream extends Readable {
+    constructor(options) {
+        super(options);
+        this.current = 1;
+    }
+
+    _read(size) {
+        console.log(`${Math.floor(performance.now())} Called _read with size ${size}`);
+        const i = this.current++;
+        if (i > 5) {
+            this.push(null);
+        } else {
+            delay(1000).then(() => {
+                this.push(Buffer.from(`TEST ${i}\n`));
+            })
+
+        }
+    }
+}
+
+const stream = new CounterStream();
+stream.pipe(process.stdout);
+
+// LOGS:  
+// 31 Called _read with size 16384  
+// TEST 1  
+// 1048 Called _read with size 16384  
+// TEST 2  
+// 2060 Called _read with size 16384  
+// TEST 3  
+// 3067 Called _read with size 16384  
+// TEST 4  
+// 4070 Called _read with size 16384  
+// TEST 5  
+// 5083 Called _read with size 16384
+
+```
+
+
+
+### Duplex Streams
+Это стримы, которые реализуют в себе и `Writable` и `Readable`, при этом, два этих потока **независимы** друг от друга. Пример такого потока TCP-Socket. Да, мы читаем из его Readable, но писать в его Writable нам не обязательно, либо мы пишем туда совершенно другие данные.
+
+`duplex.allowHalfOpen`
+Если `false` то поток автоматически вызовет end для writable стороны, когда readable сторона закончится.
+По умолчанию значение `true`
 
 ### Transform stream
-Это стримы, которые могут трансформировать наши данные.
+Это duplex потоки, но в отличие от них, поток входа связан с потоком вывода. То есть получая данные на вход (readable), transform stream их преобразовывает и отдает сразу на поток выхода (writable)
 
 например, трансформируем наш стрим:
 
@@ -685,3 +1010,151 @@ transformed.on('readable', function(){
 
 Так же, у него есть метод flush, который нужен, если мы не просто "пропускаем" и сразу трансформируем данные, а например, храним какое-то внутреннее состояние. flush забирает из потока абсолютно все.
 Docs: В некоторых случаях операция преобразования может потребовать выдачи дополнительного бита данных в конце потока. Например, `zlib`поток сжатия будет хранить объем внутреннего состояния, используемого для оптимального сжатия выходных данных. Однако, когда поток заканчивается, эти дополнительные данные необходимо сбросить, чтобы сжатые данные были полными.
+
+### Streams Promises API
+API `stream/promises` предоставляет альтернативный набор асинхронных служебных функций для потоков, которые возвращают `Promise` объекты, а не используют коллбеки.
+
+#### `stream.pipeline(streams: Stream[] | Iterable[] | AsyncIterable[] | Function[], options?: )`
+так же есть сигнатура `stream.pipeline(source[, ...transforms], destination[, options])`
+
+Позволяет удобно сделать пайплайн для несколько потоков:
+
+```js
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);
+```
+
+`options` принимает в себя:
+- `signal: AbortSignal` - завершит поток когда сигнал был вызыван. (Promise будет reject'нут c ошибкой AbortSignal)
+- `end: boolean` - Завершить целевой поток, когда заканчивается исходный поток. Потоки преобразования всегда завершаются, даже если это значение равно `false`. **По умолчанию:** `true`
+
+```js
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);
+```
+
+#### `stream.finished(stream[, options])`
+это метод, который позволяет отслеживать **завершение работы потока** (stream) независимо от того, завершился ли он успешно, с ошибкой или был принудительно уничтожен. Это более надёжная альтернатива ручной подписке на события `'end'`, `'finish'` и `'error'`.
+
+```js
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.
+```
+
+Так же этот существует не промисифицированный метод, а функцию для получения уведомлений, когда поток больше не доступен для чтения, записи или произошла ошибка или произошло событие преждевременного закрытия.
+
+```js
+const { finished } = require('node:stream');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+finished(rs, (err) => {
+  if (err) {
+    console.error('Stream failed.', err);
+  } else {
+    console.log('Stream is done reading.');
+  }
+});
+
+rs.resume(); // Drain the stream.
+```
+
+`options` представляет из себя:
+- `error:boolean` - Если `false`, ошибки **не** будут передаваться в колбэк. По умолчанию: `true`. (Полезно, когда ошибки обрабатываются отдельно.)
+
+- `readable:boolean` - Если `false`, метод не будет ждать завершения Readable потока.. По умолчанию: `true` (Актуально для **Duplex**-потоков, где нужно отслеживать только запись)
+
+- `writable:boolean` - Если `false`, метод не будет ждать завершения Writable потока. По умолчанию: `true`(Полезно для **Duplex**-потоков, где важно только чтение.)
+
+- `signal: AbortSignal` - позволяет прервать ожидание завершения потока. Базовый поток не будет прерван, если сигнал будет прерван. callback будет вызван с AbortError. Все зарегистрированные слушатели, добавленные этой функцией, также будут удалены
+
+ 
+Примеры использования:
+ 1. **Игнорирование ошибок**
+```js
+finished(stream, { error: false }, () => {
+  console.log('Поток завершён (ошибки проигнорированы)');
+});
+```
+
+ 2. **Отслеживание только записи для Duplex-потока**
+
+```js
+const duplex = net.connect(80, 'example.com');
+
+finished(duplex, { readable: false }, (err) => {
+  console.log('Запись завершена (чтение может продолжаться)');
+});
+```
+
+ 3. **Отмена через AbortController**
+
+```js
+const controller = new AbortController();
+
+finished(stream, { signal: controller.signal }, (err) => {
+  if (err) console.error('Прервано:', err);
+});
+
+setTimeout(() => controller.abort(), 2000);
+```
+
+
+#### `stream.Readable.from(iterable[, options])`
+Вспомогательный метод для создания читаемых потоков из итераторов.
+
+```js
+const { Readable } = require('stream');
+
+const delay = (ms) => new Promise(res => setTimeout(res, ms))
+
+async function* getDataFromAsyncSource() {
+  for (let i = 0; i < 5; i++) {
+    await delay(500);
+    yield `chunk-${i}\n`;
+  }
+}
+
+const readable = Readable.from(getDataFromAsyncSource());
+
+readable.pipe(process.stdout);
+```
