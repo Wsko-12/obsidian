@@ -1,10 +1,20 @@
-
-#### Threads
-Node.js изначально является **однопоточной** платформой, что означает, что основной поток (или Event Loop) отвечает за выполнение JavaScript-кода
-Начиная с 10 версии Node.js можно использовать **Worker Threads** (рабочие потоки), которые позволяют выполнять задачи в отдельных потоках.
-
+- Что такое процесс?
+- Что такое IPC?
+- Какие методы предоставляет модуль `child_process`?
+- Чем `spawn` отличается от `exec`?
+- Как настраивать `stdio` для процесса, созданного через `spawn`
+- Какие аргументы принимаются для `stdio`
+- Что будет в `child.stdin` если для `stdio` первый канал стоит в `inherit`
+- Зачем нужен `fork`?
+- Какие методы используются для общения parent-child
+- Как можно сделать такие же методы, но создав `child` через `spawn`
+- Какие данные можно передавать через ipc
+- Как можно распределить сетевую нагрузку, не используя `Clusters`
+- Как сделать IPC, если процессы расположены на разных машинах
+- Что такое `Clusters`?
+- Как он реализует распределение сетевой нагрузки?
 #### Processes
-Процесс — это независимая, изолированная единица выполнения программы. У каждого процесса есть собственная память, системные ресурсы и поток выполнения.
+Процесс — это независимая, изолированная единица выполнения программы. У каждого процесса есть собственная память, системные ресурсы и поток выполнения
 
 
 **IPC (Inter-Process Communication)** — это механизм, который позволяет процессам обмениваться данными и взаимодействовать друг с другом. В Node.js IPC используется для обмена информацией между основным процессом и дочерними процессами (например, через модуль `child_process`).
@@ -97,18 +107,19 @@ const subprocess = spawn('prg', [], {
 указывает Node.js игнорировать fd в дочернем процессе. Хотя Node.js всегда будет открывать fd 0, 1 и 2 для порождаемых им процессов, установка fd в `'ignore'`заставит Node.js открыть `/dev/null`и прикрепить его к fd дочернего процесса.
 
 ###### `'inherit'`: 
-Использовать потоки родительского процесса. В первых трех позициях это эквивалентно `process.stdin`, `process.stdout`, и `process.stderr`, соответственно. В любой другой позиции эквивалентно `'ignore'`.
+Использовать потоки родительского процесса. В первых трех позициях это эквивалентно `process.stdin`, `process.stdout`, и `process.stderr`, соответственно. В любой другой позиции эквивалентно `'ignore'`. Если передали `inherit` например для stdin, то `child.stdin` будет `null`
 
 ###### `'ipc'`: 
 создать канал IPC для передачи сообщений/файловых дескрипторов между родительским и дочерним процессами.  Установка этого параметра включает [`subprocess.send()`](https://nodejs.org/api/child_process.html#subprocesssendmessage-sendhandle-options-callback)метод. Если дочерний процесс является экземпляром Node.js, наличие канала IPC включит методы [`process.send()`](https://nodejs.org/api/process.html#processsendmessage-sendhandle-options-callback)и [`process.disconnect()`](https://nodejs.org/api/process.html#processdisconnect), а также [`'disconnect'`](https://nodejs.org/api/process.html#event-disconnect)и [`'message'`](https://nodejs.org/api/process.html#event-message)события внутри дочернего процесса.
 
 То есть мы можем сделать `fork` через `spawn`, и настроить там ipc канал вот так:
 ```javascript
+// parent.js
 const { spawn } = require('child_process');
 const path = require('path');
 
 const child = spawn(process.execPath, [path.join(__dirname, 'child.js')], {
-  stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+  stdio: ['pipe', 'inherit', 'pipe', 'ipc']
 });
 
 child.on('message', (msg) => {
@@ -116,6 +127,13 @@ child.on('message', (msg) => {
 });
 
 child.send({ hello: 'world (spawn)' });
+
+
+// child.js
+process.on('message', (msg) => {
+  console.log('Parent says (spawn):', msg);
+  process.send({ reply: 'got it from spawn' });
+});
 ```
 
 ###### `Object<Stream>`:
@@ -174,9 +192,114 @@ process.on('message', (msg) => {
 | **spawn**    | Запускает процесс с потоковым вводом/выводом.                  | Для процессов, которые требуют потокового взаимодействия с большими объемами данных. |
 | **fork**     | Создает дочерние процессы Node.js с IPC.                       | Для выполнения JavaScript-кода в отдельном процессе с обменом данными.               |
 
+### Типы данных для send
+как сказано в документации:
+*The message goes through serialization and parsing. The resulting message might not be the same as what is originally sent.*
+
+Как я понимаю, никаких Transferable и SharedArrayBuffer использовать тут не получится, что логично, так как процессы изолированы по памяти.
+
+Однако, можно передавать серверы и сокеты, пример из документации:
+##### sending a server object:
+```js
+// server.js
+const { fork } = require('node:child_process');
+const { createServer } = require('node:net');
+
+const subprocess = fork('child.js');
+
+const server = createServer();
+server.on('connection', (socket) => {
+  socket.end('handled by parent');
+});
+server.listen(1337, () => {
+  subprocess.send('server', server);
+});
+
+//child.js
+process.on('message', (m, server) => {
+	if (m === 'server') {
+		server.on('connection', (socket) => {
+			socket.end('handled by child');
+		});
+	}
+});
+
+//client.js
+const net = require('net');
+
+for (let i = 0; i < 10; i++){
+    const client = net.createConnection({ port: 1337 }, () => {});
+
+    client.on('data', (d)=>{
+        console.log(d.toString())
+        client.end();
+    })
+}
+
+//LOGS:
+// handled by child  
+// handled by parent  
+// handled by child  
+// handled by parent  
+// handled by parent  
+// handled by parent  
+// handled by parent  
+// handled by parent  
+// handled by parent  
+// handled by parent
+```
+
+##### sending a socket object
+```js
+//server.js
+const { fork } = require('node:child_process');
+const { createServer } = require('node:net');
+
+const child = fork('child.js', ['normal']);
+
+const server = createServer();
+server.on('connection', (socket) => {
+  child.send('socket', socket);
+});
+server.listen(1337);
+
+//child.js
+process.on('message', (m, socket) => {
+	if (m === 'socket') {
+		if (socket) {
+			socket.end(`Request handled by child`);
+		}
+	}
+});
+
+//client.js
+const net = require('net');
+
+for (let i = 0; i < 10; i++){
+    const client = net.createConnection({ port: 1337 }, () => {});
+
+    client.on('data', (d)=>{
+        console.log(d.toString())
+        client.end();
+    })
+}
+
+// LOGS:
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child  
+// Request handled by child
+```
+
 # Clusters
 Пораждают процессы как и child_process ( The worker processes are spawned using the [`child_process.fork()`](https://nodejs.org/api/child_process.html#child_processforkmodulepath-args-options) method, so that they can communicate with the parent via IPC and pass server handles back and forth. )
-В отличии от child_process, может автоматически распределять сетевую нагрузку:
+В отличии от child_process, может **автоматически** распределять сетевую нагрузку:
 
 ```js
 const cluster = require('cluster');  
@@ -210,8 +333,138 @@ if (cluster.isMaster) {
 	  
 	console.log(`Воркер ${process.pid} запущен`);  
 }
+
+
+
+//client.js
+
+for(let i = 0; i < 1000; i++){  
+	fetch("http://localhost:8000").then((r) => r.text()).then(console.log)  
+}
+
+//LOGS
+// ...
+// Ответ от воркера 5428
+// Ответ от воркера 5884
+// Ответ от воркера 5428
+// ...
+
 ```
 
+Если мы создадим несколько процессов через `fork()` и там попробуем открыть сервер на одном порту, то упадет ошибка `EADDRINUSE:`
+
+```js
+//master.js
+const { fork } = require('child_process');  
+  
+for(let i = 0; i < 3; i++) {  
+	fork('child.js')
+}
+
+//child.js
+const http = require('http');
+
+console.log(`Worker PID: ${process.pid}`);
+
+const server = http.createServer((req, res) => {
+	res.writeHead(200, {'Content-Type': 'text/txt; charset=utf-8'});
+	res.end(`Ответ от воркера ${process.pid}\n`);
+})
+	
+server.listen(8000);
+
+```
+
+в `cluster` это **возможно**, и работает благодаря **механизму передачи сокетов через родительский процесс**, как это было сделано в примере *sending a socket object* выше.
+
+Когда используется `cluster`:
+Когда вызывается `.listen(port)` в воркере, Node.js перехватывает этот вызов, и:
+- Не даёт воркеру напрямую слушать порт (иначе была бы ошибка EADDRINUSE).
+- Вместо этого:
+	- отправляет мастеру сообщение по IPC: "Привет, я хочу слушать порт 3000"
+	- мастер один раз открывает порт и начинает слушать.
+	- все новые входящие соединения принимает мастер, и
+	- передаёт их обратно воркерам, у которых стояло .listen(port).
+
+Эти сообщения можно перехватить:
+```js
+const cluster = require('cluster');
+const http = require('http');
+
+if (cluster.isPrimary) {
+    for(let i = 0; i < 1; i++){ // 1 чтобы было меньше логов
+        const worker = cluster.fork();
+
+        worker.process.on('internalMessage', (msg) => {
+            console.log('[MASTER]', msg);
+        });
+    }
+}else{
+    const server = http.createServer((req, res) => {
+        res.end(`PID: ${process.pid}`);
+    });
+
+    server.listen(3000);
+
+    process.on('internalMessage', (msg, socket) => {
+        console.log('[WORKER] Received from master:', msg, socket.constructor.name);
+    });
+
+    process.send({ type: 'ready', pid: process.pid });
+}
+
+[MASTER] { cmd: 'NODE_CLUSTER', act: 'online', seq: 0 }
+[MASTER] {
+  cmd: 'NODE_CLUSTER',
+  act: 'queryServer', <-- Child процесс Запрашивает сервер (server.listen(3000))
+  index: 0,
+  data: null,
+  address: null,
+  port: 3000,
+  addressType: 4,
+  backlog: 0,
+  seq: 1
+}
+[MASTER] { cmd: 'NODE_HANDLE_ACK' }
+[WORKER] Received from master: {   
+  cmd: 'NODE_HANDLE',
+  type: 'net.Native',
+  msg: {
+    cmd: 'NODE_CLUSTER',
+    errno: 0,
+    key: 'null:3000:4:undefined:0',
+    ack: 1,
+    data: null,
+    seq: 0
+  }
+} TCP <-- !
+[WORKER] Received from master: {
+  cmd: 'NODE_CLUSTER',
+  errno: 0,
+  key: 'null:3000:4:undefined:0',
+  ack: 1,
+  data: null,
+  seq: 0
+} TCP
+[MASTER] {
+  cmd: 'NODE_CLUSTER',
+  act: 'listening',
+  index: 0,
+  data: null,
+  address: null,
+  port: 3000,
+  addressType: 4,
+  backlog: 0,
+  seq: 2
+}
+
+
+```
+А сам этот реквест формируется тут:
+https://github.com/nodejs/node/blob/v23.11.0/lib/net.js#L2000
+
+
+### IPC на разных машинах
 child_process и clusters работают в рамках одной операционной системы, чтобы распределить процессы на разные машины, можно использовать TCP соединение через библиотеку `net`
 
 ```js
