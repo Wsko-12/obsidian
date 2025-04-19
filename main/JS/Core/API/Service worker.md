@@ -1,3 +1,12 @@
+- Что такое ServiceWorker?
+- Какие стадии жизненного цикла у ServiceWorker?
+- Зачем нужен `event.waitUntil()`
+- Что рекомендуется делать на каждой стадии?
+- Когда обновляется SW?
+- Как будет идти перехват запросов при первой установке/переустановке?
+- Как это поведение контролировать?
+- Как пользоваться кешом?
+- Что еще можно делать с помощью SW?
 
 Service worker - это как прокси между веб приложением и браузером/сетью. Позволяет перехватывать запросы и тем самым, например, кешировать их.
 
@@ -37,9 +46,11 @@ https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/register
 - `/app/style.css` — обслуживается Service Worker
 - `/about.html` — **не обслуживается**, так как не входит в указанный `scope`
 
+ 
 Так же будет, если сервис воркер загружен из `/app/sw.js`, так как Service Worker не может иметь область действия шире своего собственного местоположения.
 
 Но это можно расширить, если дать `{scope: "/"}`, однако для этого нужен заголовок на `sw.js` `Service-Worker-Allowed: <scope>`. Если сервер не установил заголовок, регистрация сервисного работника завершится неудачей, так как запрошенный объект `scope`слишком широк.
+
 
 ```js
 if ("serviceWorker" in navigator) {
@@ -68,11 +79,13 @@ navigator.serviceWorker.getRegistrations().then((regs) => {
 ```
 
 
-##### Установка
+## Установка
 В этом событии можно:
 - Предварительно закэшировать необходимые файлы.
 
-Если в `install` будет использоваться асинхронное API, следует использовать `event.waitUntil`, чтобы установка завершилось тогда, когда все прошло успешно
+Так же следует упомянуть, что в sw используются ExpandableEvents,
+а именно `event.waitUntil(Promise)`
+Это нужно, если в `install` будет использоваться асинхронное API, чтобы установка завершилось тогда, когда все прошло успешно и activate не вызывался раньше времени
 
 ```js
 const SW = 1  
@@ -95,14 +108,13 @@ self.addEventListener('install', (ev) => {
 
 Активация может произойти раньше при использовании `self.skipWaiting()`
   
-##### Активация
-На этом этапе следует делать очистка старых кэшей, то есть удалять устаревшие данные из кэша, которые использовались предыдущими версиями Service Worker.
+## Активация
+На этом этапе следует делать очистку старых кэшей, то есть удалять устаревшие данные из кэша, которые использовались предыдущими версиями Service Worker.
 
-Для того, чтобы `fetch` начал отрабатывать сразу, после первого `activate`, следуют вызвать `event.waitUntil(self.clients.claim());`.
+Для того, чтобы `fetch` начал отрабатывать сразу, после **самого первого** `activate`, следуют вызвать `event.waitUntil(self.clients.claim());`.
 
 Eсли `activate`  был вызван немедленно с помощью `self.skipWaiting()` в `install`, и была открыта старая вкладка и открывается новая, где загружается обновленный SW, то на старой вкладке запросы будут тоже идти через новый `fetch`  даже **БЕЗ** `event.waitUntil(self.clients.claim());`. На ней так же вызовется `oncontrollerchange`
-
-Хотя в доке написано *Вызывает событие "`controllerchange`" на [`navigator.serviceWorker`](https://developer.mozilla.org/ru/docs/Web/API/ServiceWorkerContainer "navigator.serviceWorker") всех клиентских страниц, контролируемых сервис-воркером.* (https://developer.mozilla.org/ru/docs/Web/API/Clients/claim), оно отрабатывает и без него
+#### Возможные кейсы:
 
 ```html
 <!DOCTYPE html>
@@ -112,64 +124,153 @@ Eсли `activate`  был вызван немедленно с помощью `
     <title>Title</title>
 </head>
 <body>
-<img id="img" src="./img.png">
+<button id="button">CLICK</button>
 <script>
-console.log("REFRESH")
-  document.getElementById("img").addEventListener('click', () => {
-    const img2 = new Image();
-    img2.src = "./img2.png"
+  navigator.serviceWorker.register("./sw.js", {scope: "./"}).then((reg) => {
+    console.log(reg)
   })
 
-  navigator.serviceWorker.register("./sw.js");
-
-  const id = Math.random();
-  console.log("ID", id);
-  navigator.serviceWorker.oncontrollerchange = () => {
-    console.log('CONTROLLER CHANGED', id)
-  };
+  button.onclick = function (){
+    document.createElement("img").src = "texture.png"
+  }
 </script>
 </body>
 </html>
 ```
 
 ```js
-const SW = 1
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+//sw.js
+
+const version = "V1"
+self.addEventListener('fetch', (e) => {
+    console.log(version, e.request);
+    e.respondWith(fetch(e.request))
+})
 self.addEventListener('install', (ev) => {
-    self.skipWaiting();
-    console.log(`install ${SW}`)
-    ev.waitUntil(delay(1000))
+    console.log(`install ${version}`)
+    // self.skipWaiting();
 })
 
 self.addEventListener('activate', (ev) => {
+    console.log(`activate ${version}`)
     // ev.waitUntil(self.clients.claim())
-    console.log(`activate ${SW}`)
-})
-
-
-self.addEventListener('fetch', (ev) => {
-    console.log(`fetch ${SW}`, ev.clientId)
 })
 ```
 
 
+Самый обычный, простая установка без скипов:
 ```
-// На второй вкладке, без релоада
-REFRESH
-ID 0.48171652829106426
-fetch 0 395e8533-b5e7-421b-897d-4deaad223710 (sw.js)
-fetch 0 b6536b25-b35c-4a55-aae6-e2ef071b3ff4 (sw.js)
-...
-// обновлили первую вкладку, тут пишет:
-install 1 (sw.js)
-CONTROLLER CHANGED 0.48171652829106426
-activate 1 (sw.js)
-// кликаем по картинке
-fetch 1 395e8533-b5e7-421b-897d-4deaad223710 (sw.js)
+SERVICE WORKER V1 DEPLOED
+Open TAB A
+INSTALL V1
+ACTIVATE V1
+- NO FETCH
+Reload TAB A
+FETCH V1
 ```
 
+Самая первая установка, но открывается вторая вкладка после первой:
+```
+SERVICE WORKER V1 DEPLOED 
+Open TAB A
+INSTALL V1
+ACTIVATE V1                 
+-                               OPEN TAB B
+- NO FETCH                      FETCH V1
+Reload TAB A
+FETCH V1
+```
 
-##### Перехват запросов
+Самая первая установка, но открыта вкладка до того, как SW задеплоен
+```
+Open TAB A
+SERVICE WORKER V1 DEPLOED 
+-                            OPEN TAB B
+-                            INSTALL V1
+-                            ACTIVATE V1   
+-                            NO FETCH
+Reload TAB A
+FETCH V1                     NO FETCH
+```
+
+Если так же зеркально релоаднуть другую, то все равно на первой ничего не будет:
+
+```
+Open TAB A
+SERVICE WORKER V1 DEPLOED 
+-                            OPEN TAB B
+-                            INSTALL V1
+-                            ACTIVATE V1   
+-                            Reload TAB B
+- NO FETCH                   FETCH V1  
+```
+
+Точно такое же поведение будет, если использовать `self.skipWaiting()` в `install`.
+Чтобы начать перехват запросов сразу, следует вызвать `ev.waitUntil(self.clients.claim())` в `activate`
+
+```
+SERVICE WORKER V1 DEPLOED
+Open TAB A
+INSTALL V1
+ACTIVATE V1
+ev.waitUntil(self.clients.claim())
+FETCH V1
+```
+
+Понятное дело, что если вторая вкладка откроется после первой, то ее fetch тоже будет перехватываться.
+
+Теперь, первая вкладка открылась до деплоя SW и вызывается `ev.waitUntil(self.clients.claim())` в `activate`
+
+```
+Open TAB A
+SERVICE WORKER V1 DEPLOED 
+-                            OPEN TAB B
+-                            INSTALL V1
+-                            ACTIVATE V1  
+-                            ev.waitUntil(self.clients.claim())
+FETCH V1                     FETCH V1
+```
+
+Теперь переезд на новую версию SW
+```
+SERVICE WORKER V2 DEPLOED
+Open TAB A
+INSTALL V2
+FETCH V1
+Reload TAB A
+FETCH V1
+Close TAB A
+Open TAB A
+INSTALL V2 (IDK)
+ACTIVATE V2
+FETCH V2
+```
+
+Точно так же будет, если открыть вторую вкладку. SW будет ждать, пока все вкладки использующие его не закроются полностью.
+
+Если изменить это поведение с помощью `self.skipWaiting()` в `install`.
+```
+SERVICE WORKER V2 DEPLOED
+Open TAB A
+INSTALL V2
+self.skipWaiting()
+ACTIVATE V2
+FETCH V2
+```
+
+Если вкладка была открыта до деплоя SW V2  `self.skipWaiting()` в `install`.
+
+```
+Open TAB A
+FETCH V1
+SERVICE WORKER V2 DEPLOED          Open TAB B
+-                                  INSTALL V2
+-                                  self.skipWaiting()
+-                                  ACTIVATE V2
+FETCH V2                           FETCH V2 
+```
+
+## Перехват запросов
 Для того, чтобы начать перехватывать запросы, добавляем `fetch` event listenter. При этом в коллбек будет приходить fetchEvent. Этот реквест мы можем как просто пропустить через себя и ничего с ним не делать:
 
 ```js
@@ -201,14 +302,96 @@ self.addEventListener("fetch", (event) => {
         return cachedResponse;
       }
 
-      // В случае, если данные не были найдены в кеше, получаем их с сервера.
-      return fetch(event.request);
+      // В случае, если данные не были найдены в кеше, получаем их с сервера. и кладем в кеш
+      const fresh = await fetch(event.request);
+      cache.put(event.request, fresh.clone());
+	  return fresh;
     })(),
   );
 });
 ```
 
 Если мы хотим положить response в кеш, нужно его клонировать. При этом, можно сначала ответить браузеру, затем с помошью `ev.waitUntil` класть ответ в кеш
+
+
+## Background Synchronization API
+https://developer.mozilla.org/en-US/docs/Web/API/Background_Synchronization_API
+
+## Push API
+```js
+
+// main.js
+async function setUpPush(){
+	const registration = await navigator.serviceWorker.register('push-sw.js');
+	const subscription = await registration.pushManager.getSubscription();
+	
+	if(subscription){
+		return;
+	}
+	
+	const newSubscription = await registration.pushManager.subscribe({
+		userVisibleOnly: true,
+		// generated by require("web-push").generateVAPIDKeys()
+		applicationServerKey: "some-key" 
+	});
+	
+	sendSubscriptionToServer(newSubscription);
+}
+
+setUpPush()
+
+// push-sw.js
+self.addEventListener('push', function(event) {
+	event.waitUntil(
+		self.registration.showNotification('Title', {
+			body: event.data ? event.data.text() : 'no payload',
+		})
+	);
+});
+
+//server.js
+const webPush = require("web-push");
+
+// generate by webPush.generateVAPIDKeys()
+const VAPID_PUBLIC_KEY = "some-key";
+const VAPID_PRIVATE_KEY = "some-key";
+
+// Set the keys used for encrypting the push messages.
+webPush.setVapidDetails(
+  "https://example.com/",
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY
+);
+
+function sendPush(){
+	// Subscription from client
+	const subscription = {
+	  "endpoint": "....",
+	  "expirationTime": null,
+	  "keys": {
+	      "p256dh": "....",
+	      "auth": "....."
+	  }
+	}
+
+	const payload = "Hello world";
+	const options = {
+	  TTL: 10000,
+	};
+
+	webPush.sendNotification(subscription, payload, options)
+}
+sendPush();
+
+```
+
+
+https://developer.mozilla.org/ru/docs/Web/API/Push_API
+https://github.com/mdn/serviceworker-cookbook/tree/master/push-payload
+https://www.youtube.com/watch?v=2zHqTjyfIY8&ab_channel=Ashotofcode
+https://github.com/web-push-libs/web-push
+https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Tutorials/js13kGames/Re-engageable_Notifications_Push#push
+
 
 Links:
 https://github.com/mdn/serviceworker-cookbook/
